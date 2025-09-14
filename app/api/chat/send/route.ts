@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { sendMessage } from '@/lib/actions/chat.actions';
 import { pusherServer, PUSHER_CHANNELS, PUSHER_EVENTS } from '@/lib/pusher';
 import { Chat } from '@/lib/models/chat.model';
@@ -9,7 +9,7 @@ export async function POST(req: NextRequest) {
     const { chatId, content, messageType } = await req.json();
 
     if (!chatId || !content) {
-      return new Response('Missing required fields', { status: 400 });
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
     // Send message to database
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     const chat = await Chat.findById(chatId).select('participants').lean();
     
     if (!chat) {
-      return new Response('Chat not found', { status: 404 });
+      return NextResponse.json({ error: 'Chat not found' }, { status: 404 });
     }
 
     // Trigger Pusher event to all participants in the chat
@@ -51,12 +51,9 @@ export async function POST(req: NextRequest) {
       )
     );
 
-    return new Response(JSON.stringify(message), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return NextResponse.json(message, { status: 200 });
   } catch (error) {
     console.error('Send message API error:', error);
-    return new Response('Failed to send message', { status: 500 });
+    return NextResponse.json({ error: 'Failed to send message' }, { status: 500 });
   }
 }

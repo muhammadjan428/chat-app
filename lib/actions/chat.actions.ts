@@ -4,6 +4,7 @@ import { auth } from '@clerk/nextjs/server';
 import { Chat, Message } from '../models/chat.model';
 import User from '../models/user.model';
 import { connectToDB } from '../database';
+import { pusherServer, PUSHER_CHANNELS, PUSHER_EVENTS } from '../pusher';
 
 // Get all chats for current user with unseen message counts
 export const getUserChats = async () => {
@@ -24,7 +25,7 @@ export const getUserChats = async () => {
       chats.map(async (chat) => {
         const participants = await User.find({
           clerkId: { $in: chat.participants }
-        }).select('clerkId first_name last_name image').lean();
+        }).select('clerkId first_name last_name image lastSeen').lean();
 
         // Count unseen messages for current user
         const unseenCount = await Message.countDocuments({
@@ -33,9 +34,20 @@ export const getUserChats = async () => {
           'readBy.userId': { $ne: userId } // Not read by current user
         });
 
+        // Determine online status for participants
+        const participantsWithStatus = participants.map(participant => {
+          const lastSeen = participant.lastSeen || new Date(0);
+          const isOnline = (Date.now() - new Date(lastSeen).getTime()) < 300000; // 5 minutes
+          
+          return {
+            ...participant,
+            isOnline
+          };
+        });
+
         return {
           ...chat,
-          participantDetails: participants,
+          participantDetails: participantsWithStatus,
           unseenCount
         };
       })
@@ -85,7 +97,7 @@ export const createOrGetChat = async (participantIds: string[]) => {
   }
 };
 
-// Send message
+// Send message with enhanced Pusher integration
 export const sendMessage = async (chatId: string, content: string, messageType: 'text' | 'image' | 'file' = 'text') => {
   try {
     const { userId } = await auth();
@@ -125,7 +137,9 @@ export const sendMessage = async (chatId: string, content: string, messageType: 
 
     const messageWithSender = {
       ...message.toObject(),
-      sender
+      sender,
+      readCount: 1,
+      isRead: true
     };
 
     return JSON.parse(JSON.stringify(messageWithSender));
@@ -182,7 +196,7 @@ export const getChatMessages = async (chatId: string, page: number = 1, limit: n
   }
 };
 
-// Mark messages as read - Updated with Pusher integration
+// Mark messages as read with enhanced Pusher integration
 export const markMessagesAsRead = async (chatId: string) => {
   try {
     const { userId } = await auth();
@@ -195,7 +209,7 @@ export const markMessagesAsRead = async (chatId: string) => {
       chatId,
       senderId: { $ne: userId }, // Not sent by current user
       'readBy.userId': { $ne: userId } // Not read by current user
-    }).select('_id').lean();
+    }).select('_id senderId').lean();
 
     if (unreadMessages.length === 0) {
       return { success: true, markedCount: 0 };
@@ -218,6 +232,24 @@ export const markMessagesAsRead = async (chatId: string) => {
       }
     );
 
+    // Send Pusher event for read receipts
+    if (result.modifiedCount > 0) {
+      try {
+        await pusherServer.trigger(
+          PUSHER_CHANNELS.CHAT(chatId),
+          PUSHER_EVENTS.MESSAGE_READ,
+          {
+            messageIds: messageIds.map(id => id.toString()),
+            userId,
+            chatId
+          }
+        );
+      } catch (pusherError) {
+        console.error('Pusher error in markMessagesAsRead:', pusherError);
+        // Don't fail the operation if Pusher fails
+      }
+    }
+
     return { 
       success: true, 
       markedCount: result.modifiedCount,
@@ -226,92 +258,6 @@ export const markMessagesAsRead = async (chatId: string) => {
   } catch (error) {
     console.error('[MARK_MESSAGES_READ_ERROR]', error);
     return { success: false, markedCount: 0 };
-  }
-};
-
-// Mark single message as read
-export const markMessageAsRead = async (messageId: string) => {
-  try {
-    const { userId } = await auth();
-    if (!userId) return { success: false };
-
-    await connectToDB();
-
-    const message = await Message.findById(messageId);
-    if (!message) {
-      return { success: false, error: 'Message not found' };
-    }
-
-    // Check if already read by this user
-    const alreadyRead = message.readBy?.some(read => read.userId === userId);
-    if (alreadyRead) {
-      return { success: true, alreadyRead: true };
-    }
-
-    // Mark as read
-    await Message.findByIdAndUpdate(messageId, {
-      $push: {
-        readBy: {
-          userId,
-          readAt: new Date()
-        }
-      }
-    });
-
-    return { success: true, alreadyRead: false };
-  } catch (error) {
-    console.error('[MARK_MESSAGE_READ_ERROR]', error);
-    return { success: false };
-  }
-};
-
-// Get unseen message count for a specific chat
-export const getUnseenMessageCount = async (chatId: string) => {
-  try {
-    const { userId } = await auth();
-    if (!userId) return 0;
-
-    await connectToDB();
-
-    const count = await Message.countDocuments({
-      chatId,
-      senderId: { $ne: userId }, // Not sent by current user
-      'readBy.userId': { $ne: userId } // Not read by current user
-    });
-
-    return count;
-  } catch (error) {
-    console.error('[GET_UNSEEN_MESSAGE_COUNT_ERROR]', error);
-    return 0;
-  }
-};
-
-// Get total unseen message count across all chats
-export const getTotalUnseenCount = async () => {
-  try {
-    const { userId } = await auth();
-    if (!userId) return 0;
-
-    await connectToDB();
-
-    // Get all chats user is part of
-    const userChats = await Chat.find({
-      participants: userId
-    }).select('_id').lean();
-
-    const chatIds = userChats.map(chat => chat._id);
-
-    // Count all unseen messages across user's chats
-    const count = await Message.countDocuments({
-      chatId: { $in: chatIds },
-      senderId: { $ne: userId }, // Not sent by current user
-      'readBy.userId': { $ne: userId } // Not read by current user
-    });
-
-    return count;
-  } catch (error) {
-    console.error('[GET_TOTAL_UNSEEN_COUNT_ERROR]', error);
-    return 0;
   }
 };
 
@@ -327,7 +273,7 @@ export const getAvailableUsers = async (searchTerm?: string) => {
       clerkId: { $ne: userId } // Exclude current user
     };
 
-    if (searchTerm) {
+    if (searchTerm && searchTerm.length > 0) {
       query.$or = [
         { first_name: { $regex: searchTerm, $options: 'i' } },
         { last_name: { $regex: searchTerm, $options: 'i' } },
@@ -336,11 +282,22 @@ export const getAvailableUsers = async (searchTerm?: string) => {
     }
 
     const users = await User.find(query)
-      .select('clerkId first_name last_name image email')
+      .select('clerkId first_name last_name image email lastSeen')
       .limit(20)
       .lean();
 
-    return JSON.parse(JSON.stringify(users));
+    // Add online status
+    const usersWithStatus = users.map(user => {
+      const lastSeen = user.lastSeen || new Date(0);
+      const isOnline = (Date.now() - new Date(lastSeen).getTime()) < 300000; // 5 minutes
+      
+      return {
+        ...user,
+        isOnline
+      };
+    });
+
+    return JSON.parse(JSON.stringify(usersWithStatus));
   } catch (error) {
     console.error('[GET_AVAILABLE_USERS_ERROR]', error);
     return [];
