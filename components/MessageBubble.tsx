@@ -9,6 +9,7 @@ interface MessageBubbleProps {
   isGroup?: boolean;
   participantsCount?: number;
   onRetry?: (messageId: string) => void;
+  showAvatar?: boolean;
 }
 
 const MessageBubble = memo(({ 

@@ -153,6 +153,7 @@ const ChatMessages = memo(({
                       isOwnMessage={isOwnMessage}
                       isGroup={selectedChat?.isGroup || false}
                       participantsCount={participantsCount}
+                      showAvatar={showAvatar}
                       onRetry={onRetryMessage}
                     />
                   </div>

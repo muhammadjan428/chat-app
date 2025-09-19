@@ -4,6 +4,12 @@ import { pusherServer, PUSHER_CHANNELS, PUSHER_EVENTS } from '@/lib/pusher';
 import { Chat } from '@/lib/models/chat.model';
 import { connectToDB } from '@/lib/database';
 
+// Define the type for the chat with participants
+interface ChatWithParticipants {
+  _id: string;
+  participants: string[];
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { chatId, content, messageType } = await req.json();
@@ -18,7 +24,7 @@ export async function POST(req: NextRequest) {
     await connectToDB();
     
     // Get chat participants for Pusher notifications
-    const chat = await Chat.findById(chatId).select('participants').lean();
+    const chat = await Chat.findById(chatId).select('participants').lean() as ChatWithParticipants | null;
     
     if (!chat) {
       return NextResponse.json({ error: 'Chat not found' }, { status: 404 });

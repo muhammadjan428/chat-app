@@ -1,12 +1,14 @@
-import { useState, memo } from 'react';
+import { useState, memo, useEffect } from 'react';
 import Image from 'next/image';
 import { Plus, Search } from 'lucide-react';
 import { Chat } from '@/types/chat';
 import OnlineStatus from './OnlineStatus';
+import { pusherClient, PUSHER_CHANNELS, PUSHER_EVENTS } from '@/lib/pusher';
 
 interface TypingUser {
   userId: string;
   userName: string;
+  chatId: string;
 }
 
 interface ChatSidebarProps {
@@ -22,7 +24,6 @@ interface ChatSidebarProps {
   onNewChatClick: () => void;
   isUserOnline: (userId: string) => boolean;
   loading?: boolean;
-  typingUsers?: TypingUser[]; // Add typing users prop
 }
 
 const ChatSidebar = memo(({
@@ -33,10 +34,51 @@ const ChatSidebar = memo(({
   onChatSelect,
   onNewChatClick,
   isUserOnline,
-  loading = false,
-  typingUsers = []
+  loading = false
 }: ChatSidebarProps) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
+
+  // Subscribe to typing indicators for all chats
+  useEffect(() => {
+    if (!chats.length) return;
+
+    const subscriptions: any[] = [];
+
+    chats.forEach(chat => {
+      const channel = pusherClient.subscribe(PUSHER_CHANNELS.TYPING(chat._id));
+      
+      const handleUserTyping = (data: TypingUser) => {
+        // Only show typing if it's not the current user
+        if (data.userId !== currentUserId) {
+          setTypingUsers(prev => {
+            // Remove any existing typing indicator for this user in this chat
+            const filtered = prev.filter(user => !(user.userId === data.userId && user.chatId === data.chatId));
+            // Add the new typing indicator
+            return [...filtered, data];
+          });
+        }
+      };
+
+      const handleUserStopTyping = (data: TypingUser) => {
+        setTypingUsers(prev => 
+          prev.filter(user => !(user.userId === data.userId && user.chatId === data.chatId))
+        );
+      };
+
+      channel.bind(PUSHER_EVENTS.USER_TYPING, handleUserTyping);
+      channel.bind(PUSHER_EVENTS.USER_STOP_TYPING, handleUserStopTyping);
+      
+      subscriptions.push(channel);
+    });
+
+    return () => {
+      subscriptions.forEach(channel => {
+        pusherClient.unsubscribe(channel.name);
+      });
+      setTypingUsers([]); // Clear typing indicators when component unmounts
+    };
+  }, [chats, currentUserId]);
 
   // Filter chats based on search term
   const filteredChats = chats.filter(chat => {
@@ -95,22 +137,25 @@ const ChatSidebar = memo(({
     }
   };
 
-  // Check if someone is typing in a specific chat
+  // Get typing message for a specific chat
   const getTypingMessage = (chat: Chat) => {
-    const chatTypingUsers = typingUsers.filter(user => {
-      // For direct messages, check if the typing user is the other participant
-      if (!chat.isGroup) {
-        const otherParticipantId = getOtherParticipantId(chat);
-        return user.userId === otherParticipantId;
-      }
-      // For group chats, you might need additional logic based on your chat structure
-      return false;
-    });
+    const chatTypingUsers = typingUsers.filter(user => user.chatId === chat._id);
 
-    if (chatTypingUsers.length > 0) {
-      return `${chatTypingUsers[0].userName} is typing...`;
+    if (chatTypingUsers.length === 0) return null;
+
+    if (chat.isGroup) {
+      // For group chats, show who is typing
+      if (chatTypingUsers.length === 1) {
+        return `${chatTypingUsers[0].userName} is typing...`;
+      } else if (chatTypingUsers.length === 2) {
+        return `${chatTypingUsers[0].userName} and ${chatTypingUsers[1].userName} are typing...`;
+      } else {
+        return `${chatTypingUsers.length} people are typing...`;
+      }
+    } else {
+      // For direct messages, just show "typing..."
+      return 'typing...';
     }
-    return null;
   };
 
   // Calculate total unseen messages (only count chats with unseen > 0)
@@ -262,9 +307,16 @@ const ChatSidebar = memo(({
                     
                     {/* Show typing message or last message */}
                     {typingMessage ? (
-                      <p className="text-sm text-blue-600 font-medium italic">
-                        {typingMessage}
-                      </p>
+                      <div className="flex items-center space-x-1">
+                        <div className="flex space-x-1">
+                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce"></div>
+                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                          <div className="w-1 h-1 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        </div>
+                        <p className="text-sm text-blue-600 font-medium italic ml-2">
+                          {typingMessage}
+                        </p>
+                      </div>
                     ) : chat.lastMessage ? (
                       <p className={`text-sm truncate ${
                         unseenCount > 0 
