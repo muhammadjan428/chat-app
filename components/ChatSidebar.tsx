@@ -1,6 +1,6 @@
-import { useState, memo, useEffect } from 'react';
+import { useState, memo, useEffect, useMemo } from 'react';
 import Image from 'next/image';
-import { Plus, Search } from 'lucide-react';
+import { Plus, Search, Users } from 'lucide-react';
 import { Chat } from '@/types/chat';
 import OnlineStatus from './OnlineStatus';
 import { pusherClient, PUSHER_CHANNELS, PUSHER_EVENTS } from '@/lib/pusher';
@@ -22,6 +22,7 @@ interface ChatSidebarProps {
   currentUserId: string;
   onChatSelect: (chat: Chat) => void;
   onNewChatClick: () => void;
+  onCreateGroupClick: () => void;
   isUserOnline: (userId: string) => boolean;
   loading?: boolean;
 }
@@ -33,19 +34,26 @@ const ChatSidebar = memo(({
   currentUserId,
   onChatSelect,
   onNewChatClick,
+  onCreateGroupClick,
   isUserOnline,
   loading = false
 }: ChatSidebarProps) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
 
-  // Subscribe to typing indicators for all chats
+  // Deduplicate chats by _id (preserves first occurrence)
+  const uniqueChats = useMemo(() => {
+    if (!chats || chats.length === 0) return [];
+    return Array.from(new Map(chats.map((c) => [c._id, c])).values());
+  }, [chats]);
+
+  // Subscribe to typing indicators for all unique chats
   useEffect(() => {
-    if (!chats.length) return;
+    if (!uniqueChats.length) return;
 
     const subscriptions: any[] = [];
 
-    chats.forEach(chat => {
+    uniqueChats.forEach(chat => {
       const channel = pusherClient.subscribe(PUSHER_CHANNELS.TYPING(chat._id));
       
       const handleUserTyping = (data: TypingUser) => {
@@ -74,14 +82,19 @@ const ChatSidebar = memo(({
 
     return () => {
       subscriptions.forEach(channel => {
-        pusherClient.unsubscribe(channel.name);
+        try {
+          // channel.name should exist on the channel instance
+          pusherClient.unsubscribe(channel.name);
+        } catch (err) {
+          // In case channel object shape differs, attempt safe unsubscribe by chat id fallback
+        }
       });
       setTypingUsers([]); // Clear typing indicators when component unmounts
     };
-  }, [chats, currentUserId]);
+  }, [uniqueChats, currentUserId]);
 
-  // Filter chats based on search term
-  const filteredChats = chats.filter(chat => {
+  // Filter chats based on search term (operate on deduplicated chats)
+  const filteredChats = uniqueChats.filter(chat => {
     if (!searchTerm) return true;
     
     const chatName = getChatDisplayName(chat).toLowerCase();
@@ -103,7 +116,7 @@ const ChatSidebar = memo(({
   };
 
   const getChatDisplayImage = (chat: Chat) => {
-    if (chat.isGroup) return null;
+    if (chat.isGroup) return chat.image || null;
     
     const otherParticipant = chat.participantDetails.find(p => p.clerkId !== currentUserId);
     return otherParticipant?.image;
@@ -159,10 +172,16 @@ const ChatSidebar = memo(({
   };
 
   // Calculate total unseen messages (only count chats with unseen > 0)
-  const totalUnseenCount = chats.reduce((total, chat) => {
+  const totalUnseenCount = uniqueChats.reduce((total, chat) => {
     const unseenCount = chat.unseenCount || 0;
     return total + (unseenCount > 0 ? unseenCount : 0);
   }, 0);
+
+  // Get group member count display
+  const getGroupMemberCount = (chat: Chat) => {
+    if (!chat.isGroup) return '';
+    return `${chat.participantDetails.length} members`;
+  };
 
   return (
     <div className="w-80 bg-white border-r border-gray-200 flex flex-col h-full">
@@ -198,13 +217,26 @@ const ChatSidebar = memo(({
             </div>
           </div>
           
-          <button
-            onClick={onNewChatClick}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-            title="Start new chat"
-          >
-            <Plus className="w-5 h-5 text-gray-600" />
-          </button>
+          <div className="flex space-x-1">
+            <button
+              onClick={() => {
+                onCreateGroupClick();
+              }}
+              className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              title="Create group"
+            >
+              <Users className="w-5 h-5 text-gray-600" />
+            </button>
+            <button
+              onClick={() => {
+                onNewChatClick();
+              }}
+              className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              title="Start new chat"
+            >
+              <Plus className="w-5 h-5 text-gray-600" />
+            </button>
+          </div>
         </div>
         
         {/* Search */}
@@ -232,16 +264,24 @@ const ChatSidebar = memo(({
               {searchTerm ? 'No chats found' : 'No conversations yet'}
             </div>
             {!searchTerm && (
-              <button
-                onClick={onNewChatClick}
-                className="mt-2 text-blue-600 hover:text-blue-700 text-sm font-medium"
-              >
-                Start your first chat
-              </button>
+              <div className="mt-3 space-y-2">
+                <button
+                  onClick={onNewChatClick}
+                  className="block mx-auto text-blue-600 hover:text-blue-700 text-sm font-medium"
+                >
+                  Start your first chat
+                </button>
+                <button
+                  onClick={onCreateGroupClick}
+                  className="block mx-auto text-green-600 hover:text-green-700 text-sm font-medium"
+                >
+                  Create a group
+                </button>
+              </div>
             )}
           </div>
         ) : (
-          filteredChats.map((chat) => {
+          filteredChats.map((chat, index) => {
             const otherParticipantId = getOtherParticipantId(chat);
             const isOtherUserOnline = otherParticipantId ? isUserOnline(otherParticipantId) : false;
             const typingMessage = getTypingMessage(chat);
@@ -249,7 +289,7 @@ const ChatSidebar = memo(({
             
             return (
               <div
-                key={chat._id}
+                key={`${chat._id}-${index}`} // ← safe unique key
                 onClick={() => onChatSelect(chat)}
                 className={`p-4 cursor-pointer hover:bg-gray-50 border-b border-gray-100 transition-colors ${
                   selectedChat?._id === chat._id ? 'bg-blue-50 border-blue-200' : ''
@@ -266,14 +306,22 @@ const ChatSidebar = memo(({
                         height={48}
                       />
                     ) : (
-                      <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-purple-500 rounded-full flex items-center justify-center">
-                        <span className="text-white font-semibold text-lg">
-                          {getChatDisplayName(chat).charAt(0).toUpperCase()}
-                        </span>
+                      <div className={`w-12 h-12 ${
+                        chat.isGroup 
+                          ? 'bg-gradient-to-br from-green-400 to-blue-500' 
+                          : 'bg-gradient-to-br from-blue-400 to-purple-500'
+                      } rounded-full flex items-center justify-center`}>
+                        {chat.isGroup ? (
+                          <Users className="w-6 h-6 text-white" />
+                        ) : (
+                          <span className="text-white font-semibold text-lg">
+                            {getChatDisplayName(chat).charAt(0).toUpperCase()}
+                          </span>
+                        )}
                       </div>
                     )}
                     
-                    {/* Online status indicator - positioned at bottom-right of avatar */}
+                    {/* Online status indicator - only for direct chats */}
                     {!chat.isGroup && (
                       <div className="absolute bottom-0 right-0 translate-x-1 translate-y-1">
                         <OnlineStatus isOnline={isOtherUserOnline} size="sm" />
@@ -305,7 +353,7 @@ const ChatSidebar = memo(({
                       )}
                     </div>
                     
-                    {/* Show typing message or last message */}
+                    {/* Show group member count or typing message or last message */}
                     {typingMessage ? (
                       <div className="flex items-center space-x-1">
                         <div className="flex space-x-1">
@@ -317,15 +365,24 @@ const ChatSidebar = memo(({
                           {typingMessage}
                         </p>
                       </div>
-                    ) : chat.lastMessage ? (
-                      <p className={`text-sm truncate ${
-                        unseenCount > 0 
-                          ? 'text-gray-900 font-medium' 
-                          : 'text-gray-500'
-                      }`}>
-                        {chat.lastMessage}
-                      </p>
-                    ) : null}
+                    ) : (
+                      <div className="space-y-1">
+                        {chat.lastMessage ? (
+                          <p className={`text-sm truncate ${
+                            unseenCount > 0 
+                              ? 'text-gray-900 font-medium' 
+                              : 'text-gray-500'
+                          }`}>
+                            {chat.lastMessage}
+                          </p>
+                        ) : null}
+                        {chat.isGroup && (
+                          <p className="text-xs text-gray-400">
+                            {getGroupMemberCount(chat)}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

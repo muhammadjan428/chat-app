@@ -1,3 +1,4 @@
+// lib/actions/chat.actions.ts
 'use server';
 
 import { auth } from '@clerk/nextjs/server';
@@ -97,6 +98,77 @@ export const createOrGetChat = async (participantIds: string[]) => {
   }
 };
 
+// Create group chat - NEW FUNCTION
+export const createGroupChat = async (name: string, description: string = '', participantIds: string[]) => {
+  try {
+    const { userId } = await auth();
+    if (!userId) throw new Error('Unauthorized');
+
+    await connectToDB();
+
+    const allParticipants = [...new Set([userId, ...participantIds])];
+
+    if (allParticipants.length < 2) {
+      throw new Error('Group chat must have at least 2 participants');
+    }
+
+    // Create new group chat
+    const newGroup = await Chat.create({
+      name: name.trim(),
+      description: description.trim(),
+      participants: allParticipants,
+      isGroup: true,
+      createdBy: userId,
+      admins: [userId] // Creator is admin by default
+    });
+
+    // Get participant details
+    const participants = await User.find({
+      clerkId: { $in: allParticipants }
+    }).select('clerkId first_name last_name image email lastSeen').lean();
+
+    const participantsWithStatus = participants.map(participant => {
+      const lastSeen = participant.lastSeen || new Date(0);
+      const isOnline = (Date.now() - new Date(lastSeen).getTime()) < 300000; // 5 minutes
+      
+      return {
+        ...participant,
+        isOnline
+      };
+    });
+
+    const groupData = {
+      ...newGroup.toObject(),
+      participantDetails: participantsWithStatus,
+      unseenCount: 0,
+      lastMessage: null,
+      lastMessageTime: null
+    };
+
+    // Notify all participants about the new group via Pusher
+    try {
+      await Promise.all(
+        allParticipants.map(async (participantId) => {
+          await pusherServer.trigger(
+            PUSHER_CHANNELS.USER(participantId),
+            PUSHER_EVENTS.CHAT_UPDATED,
+            groupData
+          );
+        })
+      );
+    } catch (pusherError) {
+      console.error('Pusher error in createGroupChat:', pusherError);
+      // Don't fail the operation if Pusher fails
+    }
+
+    return JSON.parse(JSON.stringify(groupData));
+  } catch (error) {
+    console.error('[CREATE_GROUP_CHAT_ERROR]', error);
+    throw new Error('Failed to create group chat');
+  }
+};
+
+
 // Send message with enhanced Pusher integration
 export const sendMessage = async (chatId: string, content: string, messageType: 'text' | 'image' | 'file' = 'text') => {
   try {
@@ -149,7 +221,7 @@ export const sendMessage = async (chatId: string, content: string, messageType: 
   }
 };
 
-// Get messages for a chat
+// Get messages for a chat - alias to match your existing code
 export const getChatMessages = async (chatId: string, page: number = 1, limit: number = 50) => {
   try {
     const { userId } = await auth();
@@ -261,7 +333,7 @@ export const markMessagesAsRead = async (chatId: string) => {
   }
 };
 
-// Get users to start new chat with
+// Get users to start new chat with - alias to match existing usage
 export const getAvailableUsers = async (searchTerm?: string) => {
   try {
     const { userId } = await auth();
@@ -303,6 +375,9 @@ export const getAvailableUsers = async (searchTerm?: string) => {
     return [];
   }
 };
+
+// Alias for compatibility with the modal component
+export const getAllUsers = getAvailableUsers;
 
 // Delete message
 export const deleteMessage = async (messageId: string) => {

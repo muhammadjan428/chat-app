@@ -1,11 +1,14 @@
+// components/ChatContainer.tsx
 import { useState, useEffect, useCallback, memo } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { Send } from 'lucide-react';
 import { 
   getUserChats, 
   getChatMessages, 
-  createOrGetChat, 
-  markMessagesAsRead 
+  createOrGetChat,
+  createGroupChat,
+  markMessagesAsRead,
+  getAllUsers
 } from '@/lib/actions/chat.actions';
 import { Chat, User, TypingUser, PusherMessage, PusherMessageRead } from '@/types/chat';
 import { usePusher } from '@/hooks/usePusher';
@@ -16,6 +19,7 @@ import ChatHeader from './ChatHeader';
 import ChatMessages from './ChatMessages';
 import MessageInput from './MessageInput';
 import NewChatModal from './NewChatModal';
+import CreateGroupModal from './CreateGroupModal';
 
 const ChatContainer = memo(() => {
   const { userId } = useAuth();
@@ -26,6 +30,7 @@ const ChatContainer = memo(() => {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [loading, setLoading] = useState(true);
   const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
 
   // Custom hooks
@@ -56,6 +61,15 @@ const ChatContainer = memo(() => {
       }, 50);
     }
   });
+
+  // Handle new chat created (from Pusher)
+  const handleChatUpdated = useCallback((data: Chat) => {
+    setChats(prev => {
+      const exists = prev.find(c => c._id === data._id);
+      if (exists) return prev;
+      return [data, ...prev];
+    });
+  }, []);
 
   // Pusher event handlers
   const handleNewMessage = useCallback((data: PusherMessage) => {
@@ -107,7 +121,8 @@ const ChatContainer = memo(() => {
     onNewMessage: handleNewMessage,
     onMessageRead: handleMessageRead,
     onUserStatusChange: handleUserStatusUpdate,
-    onTyping: handleTypingEvent
+    onTyping: handleTypingEvent,
+    onChatUpdated: handleChatUpdated
   });
 
   // Update user status when online status changes
@@ -185,7 +200,7 @@ const ChatContainer = memo(() => {
     setTypingUsers([]); // Clear typing users when switching chats
   }, []);
 
-  // Handle starting new chat
+  // Handle starting new direct chat
   const handleStartNewChat = useCallback(async (targetUser: User) => {
     try {
       const chat = await createOrGetChat([targetUser.clerkId]);
@@ -209,8 +224,24 @@ const ChatContainer = memo(() => {
       });
       
       setSelectedChat(chatWithDetails);
+      setShowNewChatModal(false);
     } catch (error) {
       console.error('Failed to start new chat:', error);
+    }
+  }, []);
+
+  // Handle creating group chat
+  const handleCreateGroup = useCallback(async (groupName: string, selectedUsers: User[]) => {
+    try {
+      console.log('Creating group:', groupName, selectedUsers); // Debug log
+      const participantIds = selectedUsers.map(user => user.clerkId);
+      const groupChat = await createGroupChat(groupName, '', participantIds);
+      
+      setChats(prev => [groupChat, ...prev]);
+      setSelectedChat(groupChat);
+      setShowCreateGroupModal(false);
+    } catch (error) {
+      console.error('Failed to create group:', error);
     }
   }, []);
 
@@ -254,6 +285,7 @@ const ChatContainer = memo(() => {
         currentUserId={userId}
         onChatSelect={handleChatSelect}
         onNewChatClick={() => setShowNewChatModal(true)}
+        onCreateGroupClick={() => setShowCreateGroupModal(true)}
         isUserOnline={isUserOnline}
         loading={loading}
       />
@@ -299,12 +331,20 @@ const ChatContainer = memo(() => {
               <p className="text-gray-500 mb-6 leading-relaxed">
                 Select a chat from the sidebar or start a new conversation with someone
               </p>
-              <button
-                onClick={() => setShowNewChatModal(true)}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
-              >
-                New Chat
-              </button>
+              <div className="flex space-x-3 justify-center">
+                <button
+                  onClick={() => setShowNewChatModal(true)}
+                  className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  New Chat
+                </button>
+                <button
+                  onClick={() => setShowCreateGroupModal(true)}
+                  className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
+                >
+                  Create Group
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -315,6 +355,14 @@ const ChatContainer = memo(() => {
         isOpen={showNewChatModal}
         onClose={() => setShowNewChatModal(false)}
         onStartChat={handleStartNewChat}
+      />
+
+      {/* Create Group Modal */}
+      <CreateGroupModal
+        isOpen={showCreateGroupModal}
+        onClose={() => setShowCreateGroupModal(false)}
+        onCreateGroup={handleCreateGroup}
+        currentUserId={userId}
       />
 
       {/* Connection Status */}

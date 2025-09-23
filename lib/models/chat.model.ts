@@ -1,100 +1,118 @@
-import { Schema, model, models, Document } from 'mongoose';
-// import { IUser } from './user.model';
+// lib/models/chat.model.ts
+import mongoose from 'mongoose';
 
-// Chat Room Schema
-export interface IChat extends Document {
-  _id: string;
-  name?: string; // Optional for group chats
-  participants: string[]; // Array of user clerkIds
-  isGroup: boolean;
-  lastMessage?: string;
-  lastMessageTime?: Date;
-  createdBy: string; // clerkId of creator
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const ChatSchema = new Schema<IChat>({
-  name: { 
-    type: String, 
-    required: function() { 
-      return this.isGroup; // Name required only for group chats
-    } 
-  },
-  participants: [{ 
-    type: String, 
-    required: true 
+const ChatSchema = new mongoose.Schema({
+  // Existing fields
+  participants: [{
+    type: String,
+    required: true
   }],
-  isGroup: { 
-    type: Boolean, 
-    default: false 
+  isGroup: {
+    type: Boolean,
+    default: false
   },
-  lastMessage: String,
-  lastMessageTime: Date,
-  createdBy: { 
-    type: String, 
-    required: true 
-  }
-}, {
-  timestamps: true
-});
-
-// Message Schema
-export interface IMessage extends Document {
-  _id: string;
-  chatId: string; // Reference to chat room
-  senderId: string; // clerkId of sender
-  content: string;
-  messageType: 'text' | 'image' | 'file';
-  isEdited: boolean;
-  editedAt?: Date;
-  replyTo?: string; // Reference to another message ID
-  readBy: {
-    userId: string;
-    readAt: Date;
-  }[];
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-const MessageSchema = new Schema<IMessage>({
-  chatId: { 
-    type: String, 
-    required: true,
-    index: true // Index for faster queries
+  lastMessage: {
+    type: String,
+    default: ''
   },
-  senderId: { 
-    type: String, 
-    required: true 
+  lastMessageTime: {
+    type: Date,
+    default: Date.now
   },
-  content: { 
-    type: String, 
-    required: true 
+  createdBy: {
+    type: String,
+    required: true
   },
-  messageType: { 
-    type: String, 
-    enum: ['text', 'image', 'file'],
-    default: 'text'
+  
+  // New group-specific fields
+  name: {
+    type: String,
+    trim: true,
+    maxlength: 50
   },
-  isEdited: { 
-    type: Boolean, 
-    default: false 
+  description: {
+    type: String,
+    trim: true,
+    maxlength: 200
   },
-  editedAt: Date,
-  replyTo: String,
-  readBy: [{
-    userId: { type: String, required: true },
-    readAt: { type: Date, default: Date.now }
+  image: {
+    type: String,
+    trim: true
+  },
+  admins: [{
+    type: String
   }]
 }, {
   timestamps: true
 });
 
-// Add compound index for efficient message queries
+// Add indexes
+ChatSchema.index({ participants: 1 });
+ChatSchema.index({ updatedAt: -1 });
+ChatSchema.index({ isGroup: 1 });
+
+// Validation for group chats
+ChatSchema.pre('save', function(next) {
+  if (this.isGroup && !this.name) {
+    next(new Error('Group chats must have a name'));
+  } else if (!this.isGroup && this.participants.length !== 2) {
+    next(new Error('Direct chats must have exactly 2 participants'));
+  } else if (this.isGroup && this.participants.length < 2) {
+    next(new Error('Group chats must have at least 2 participants'));
+  } else {
+    next();
+  }
+});
+
+export const Chat = mongoose.models.Chat || mongoose.model('Chat', ChatSchema);
+
+// Message Schema (keeping your existing structure)
+const MessageSchema = new mongoose.Schema({
+  chatId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Chat',
+    required: true
+  },
+  senderId: {
+    type: String,
+    required: true
+  },
+  content: {
+    type: String,
+    required: true,
+    maxlength: 1000
+  },
+  messageType: {
+    type: String,
+    enum: ['text', 'image', 'file'],
+    default: 'text'
+  },
+  readBy: [{
+    userId: String,
+    readAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  deliveredTo: [{
+    userId: String,
+    deliveredAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  isEdited: {
+    type: Boolean,
+    default: false
+  },
+  editedAt: Date
+}, {
+  timestamps: true
+});
+
+// Add indexes for messages
 MessageSchema.index({ chatId: 1, createdAt: -1 });
+MessageSchema.index({ senderId: 1 });
+MessageSchema.index({ 'readBy.userId': 1 });
 
-// Export models
-const Chat = models.Chat || model<IChat>('Chat', ChatSchema);
-const Message = models.Message || model<IMessage>('Message', MessageSchema);
-
-export { Chat, Message };
+export const Message = mongoose.models.Message || mongoose.model('Message', MessageSchema);
