@@ -41,4 +41,5 @@ export const PUSHER_EVENTS = {
   USER_ONLINE: 'user-online',
   USER_OFFLINE: 'user-offline',
   CHAT_UPDATED: 'chat-updated',
+  CHAT_DELETED: 'chat-deleted'
 };

@@ -27,17 +27,21 @@ export interface Message {
   tempId?: string;
 }
 
+export interface ParticipantDetails {
+  clerkId: string;
+  first_name: string;
+  last_name: string;
+  image?: string;
+  isOnline?: boolean;
+  lastSeen?: string;
+  email?: string;
+}
+
 export interface Chat {
   _id: string;
   participants: string[];
-  participantDetails: {
-    clerkId: string;
-    first_name: string;
-    last_name: string;
-    image?: string;
-    isOnline?: boolean;
-    lastSeen?: string;
-  }[];
+  participantDetails: ParticipantDetails[];
+  description?: string;
   lastMessage?: string;
   lastMessageTime?: string;
   isGroup: boolean;
@@ -46,6 +50,8 @@ export interface Chat {
   createdBy: string;
   createdAt: string;
   updatedAt: string;
+  image?: string;
+  admins?: string[];
 }
 
 export interface User {
@@ -100,3 +106,9 @@ export interface MessageInputState {
   isTyping: boolean;
   typingUsers: TypingUser[];
 }
+
+export interface GroupChatUpdate {
+  name?: string;
+  description?: string;
+  image?: string;
+};

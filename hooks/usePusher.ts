@@ -12,12 +12,20 @@ interface UsePusherProps {
   onUserStatusChange?: (data: { userId: string; isOnline: boolean }) => void;
   onTyping?: (data: { userId: string; userName: string; isTyping: boolean }) => void;
   onChatUpdated?: (data: Chat) => void;
+  onChatDeleted?: (data: { chatId: string }) => void;
 }
 
 interface UsePusherReturn {
   isConnected: boolean;
   sendTyping: (chatId: string, isTyping: boolean) => void;
   updateUserStatus: (isOnline: boolean) => void;
+}
+
+type ConnectionState = 'initialized' | 'connecting' | 'connected' | 'disconnected' | 'unavailable' | 'failed';
+
+interface ConnectionStateChange {
+  previous: ConnectionState;
+  current: ConnectionState;
 }
 
 // ✅ Use client events (must be private channels)
@@ -43,9 +51,9 @@ export const usePusher = ({
   useEffect(() => {
     if (!userId) return;
 
-    const handleConnectionStateChange = (state: any) => {
-      setIsConnected(state.current === 'connected');
-    };
+   const handleConnectionStateChange = (state: ConnectionStateChange) => {
+  setIsConnected(state.current === 'connected');
+};
 
     pusherClient.connection.bind('state_change', handleConnectionStateChange);
     pusherClient.connection.bind('connected', () => setIsConnected(true));

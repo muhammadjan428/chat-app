@@ -1,4 +1,4 @@
-// components/ChatContainer.tsx
+// components/ChatContainer.tsx - Updated with Group Management
 import { useState, useEffect, useCallback, memo } from 'react';
 import { useAuth, useUser } from '@clerk/nextjs';
 import { Send } from 'lucide-react';
@@ -8,7 +8,6 @@ import {
   createOrGetChat,
   createGroupChat,
   markMessagesAsRead,
-  getAllUsers
 } from '@/lib/actions/chat.actions';
 import { Chat, User, TypingUser, PusherMessage, PusherMessageRead } from '@/types/chat';
 import { usePusher } from '@/hooks/usePusher';
@@ -20,6 +19,8 @@ import ChatMessages from './ChatMessages';
 import MessageInput from './MessageInput';
 import NewChatModal from './NewChatModal';
 import CreateGroupModal from './CreateGroupModal';
+import GroupSettingsModal from './GroupSettingsModal';
+import ManageMembersModal from './ManageMembersModal';
 
 const ChatContainer = memo(() => {
   const { userId } = useAuth();
@@ -31,6 +32,8 @@ const ChatContainer = memo(() => {
   const [loading, setLoading] = useState(true);
   const [showNewChatModal, setShowNewChatModal] = useState(false);
   const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [showGroupSettingsModal, setShowGroupSettingsModal] = useState(false);
+  const [showManageMembersModal, setShowManageMembersModal] = useState(false);
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
 
   // Custom hooks
@@ -62,14 +65,36 @@ const ChatContainer = memo(() => {
     }
   });
 
-  // Handle new chat created (from Pusher)
+  // Handle chat updated/created (from Pusher)
   const handleChatUpdated = useCallback((data: Chat) => {
     setChats(prev => {
-      const exists = prev.find(c => c._id === data._id);
-      if (exists) return prev;
-      return [data, ...prev];
+      const existingIndex = prev.findIndex(c => c._id === data._id);
+      if (existingIndex >= 0) {
+        // Update existing chat
+        const updated = [...prev];
+        updated[existingIndex] = data;
+        return updated;
+      } else {
+        // Add new chat
+        return [data, ...prev];
+      }
     });
-  }, []);
+
+    // If this is the currently selected chat, update it
+    if (selectedChat && selectedChat._id === data._id) {
+      setSelectedChat(data);
+    }
+  }, [selectedChat]);
+
+  // Handle chat deleted (from Pusher)
+  const handleChatDeleted = useCallback((data: { chatId: string }) => {
+    setChats(prev => prev.filter(c => c._id !== data.chatId));
+    
+    // If deleted chat was selected, clear selection
+    if (selectedChat && selectedChat._id === data.chatId) {
+      setSelectedChat(null);
+    }
+  }, [selectedChat]);
 
   // Pusher event handlers
   const handleNewMessage = useCallback((data: PusherMessage) => {
@@ -122,7 +147,8 @@ const ChatContainer = memo(() => {
     onMessageRead: handleMessageRead,
     onUserStatusChange: handleUserStatusUpdate,
     onTyping: handleTypingEvent,
-    onChatUpdated: handleChatUpdated
+    onChatUpdated: handleChatUpdated,
+    onChatDeleted: handleChatDeleted // Add this new handler
   });
 
   // Update user status when online status changes
@@ -233,7 +259,6 @@ const ChatContainer = memo(() => {
   // Handle creating group chat
   const handleCreateGroup = useCallback(async (groupName: string, selectedUsers: User[]) => {
     try {
-      console.log('Creating group:', groupName, selectedUsers); // Debug log
       const participantIds = selectedUsers.map(user => user.clerkId);
       const groupChat = await createGroupChat(groupName, '', participantIds);
       
@@ -243,6 +268,42 @@ const ChatContainer = memo(() => {
     } catch (error) {
       console.error('Failed to create group:', error);
     }
+  }, []);
+
+  // Group management handlers
+  const handleGroupUpdated = useCallback((updatedChat: Chat) => {
+    setChats(prev => prev.map(chat => 
+      chat._id === updatedChat._id ? updatedChat : chat
+    ));
+    
+    if (selectedChat && selectedChat._id === updatedChat._id) {
+      setSelectedChat(updatedChat);
+    }
+  }, [selectedChat]);
+
+  const handleGroupDeleted = useCallback((deletedChatId: string) => {
+    setChats(prev => prev.filter(chat => chat._id !== deletedChatId));
+    
+    if (selectedChat && selectedChat._id === deletedChatId) {
+      setSelectedChat(null);
+    }
+    
+    setShowGroupSettingsModal(false);
+    setShowManageMembersModal(false);
+  }, [selectedChat]);
+
+  // Modal handlers
+  const handleOpenGroupSettings = useCallback(() => {
+    setShowGroupSettingsModal(true);
+  }, []);
+
+  const handleOpenManageMembers = useCallback(() => {
+    setShowManageMembersModal(true);
+  }, []);
+
+  const handleGroupSettingsManageMembers = useCallback(() => {
+    setShowGroupSettingsModal(false);
+    setShowManageMembersModal(true);
   }, []);
 
   // Handle typing indicator for input
@@ -299,6 +360,9 @@ const ChatContainer = memo(() => {
               selectedChat={selectedChat}
               currentUserId={userId}
               isUserOnline={isUserOnline}
+              onGroupSettingsClick={handleOpenGroupSettings}
+              onManageMembersClick={handleOpenManageMembers}
+              onChatLeft={handleGroupDeleted} // Reuse the same handler for when user leaves
             />
 
             {/* Messages */}
@@ -350,6 +414,8 @@ const ChatContainer = memo(() => {
         )}
       </div>
 
+      {/* Modals */}
+      
       {/* New Chat Modal */}
       <NewChatModal
         isOpen={showNewChatModal}
@@ -363,6 +429,26 @@ const ChatContainer = memo(() => {
         onClose={() => setShowCreateGroupModal(false)}
         onCreateGroup={handleCreateGroup}
         currentUserId={userId}
+      />
+
+      {/* Group Settings Modal */}
+      <GroupSettingsModal
+        isOpen={showGroupSettingsModal}
+        onClose={() => setShowGroupSettingsModal(false)}
+        chat={selectedChat}
+        currentUserId={userId}
+        onGroupUpdated={handleGroupUpdated}
+        onGroupDeleted={handleGroupDeleted}
+        onManageMembersClick={handleGroupSettingsManageMembers}
+      />
+
+      {/* Manage Members Modal */}
+      <ManageMembersModal
+        isOpen={showManageMembersModal}
+        onClose={() => setShowManageMembersModal(false)}
+        chat={selectedChat}
+        currentUserId={userId}
+        onGroupUpdated={handleGroupUpdated}
       />
 
       {/* Connection Status */}

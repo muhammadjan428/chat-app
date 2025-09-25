@@ -3,9 +3,26 @@
 
 import { auth } from '@clerk/nextjs/server';
 import { Chat, Message } from '../models/chat.model';
-import User from '../models/user.model';
+import User, { IUser } from '../models/user.model';
 import { connectToDB } from '../database';
 import { pusherServer, PUSHER_CHANNELS, PUSHER_EVENTS } from '../pusher';
+import { FilterQuery } from 'mongoose';
+
+// Define types for better TypeScript support
+type LeanUser = Pick<IUser, 'clerkId' | 'first_name' | 'last_name' | 'image' | 'email' | 'lastSeen'>;
+
+interface SenderMap {
+  [clerkId: string]: LeanUser;
+}
+
+interface UserSearchQuery extends FilterQuery<IUser> {
+  clerkId: { $ne: string };
+  $or?: Array<{
+    first_name?: { $regex: string; $options: string };
+    last_name?: { $regex: string; $options: string };
+    email?: { $regex: string; $options: string };
+  }>;
+}
 
 // Get all chats for current user with unseen message counts
 export const getUserChats = async () => {
@@ -26,7 +43,7 @@ export const getUserChats = async () => {
       chats.map(async (chat) => {
         const participants = await User.find({
           clerkId: { $in: chat.participants }
-        }).select('clerkId first_name last_name image lastSeen').lean();
+        }).select('clerkId first_name last_name image lastSeen').lean<LeanUser[]>();
 
         // Count unseen messages for current user
         const unseenCount = await Message.countDocuments({
@@ -125,7 +142,7 @@ export const createGroupChat = async (name: string, description: string = '', pa
     // Get participant details
     const participants = await User.find({
       clerkId: { $in: allParticipants }
-    }).select('clerkId first_name last_name image email lastSeen').lean();
+    }).select('clerkId first_name last_name image email lastSeen').lean<LeanUser[]>();
 
     const participantsWithStatus = participants.map(participant => {
       const lastSeen = participant.lastSeen || new Date(0);
@@ -168,7 +185,6 @@ export const createGroupChat = async (name: string, description: string = '', pa
   }
 };
 
-
 // Send message with enhanced Pusher integration
 export const sendMessage = async (chatId: string, content: string, messageType: 'text' | 'image' | 'file' = 'text') => {
   try {
@@ -205,7 +221,7 @@ export const sendMessage = async (chatId: string, content: string, messageType: 
     // Get sender details for the message
     const sender = await User.findOne({ clerkId: userId })
       .select('clerkId first_name last_name image')
-      .lean();
+      .lean<LeanUser>();
 
     const messageWithSender = {
       ...message.toObject(),
@@ -237,27 +253,44 @@ export const getChatMessages = async (chatId: string, page: number = 1, limit: n
 
     const skip = (page - 1) * limit;
 
+    // Define type for lean message document
+    interface LeanMessageDocument {
+      _id: string;
+      chatId: string;
+      senderId: string;
+      content: string;
+      messageType: string;
+      createdAt: Date;
+      readBy?: Array<{
+        userId: string;
+        readAt: Date;
+      }>;
+      isEdited?: boolean;
+      editedAt?: Date;
+    }
+
     const messages = await Message.find({ chatId })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .lean();
+      .lean<LeanMessageDocument[]>();
 
     // Get sender details for each message
     const senderIds = [...new Set(messages.map(msg => msg.senderId))];
     const senders = await User.find({
       clerkId: { $in: senderIds }
-    }).select('clerkId first_name last_name image').lean();
+    }).select('clerkId first_name last_name image').lean<LeanUser[]>();
 
-    const senderMap = senders.reduce((acc, sender) => {
+    // Create a properly typed sender map
+    const senderMap: SenderMap = senders.reduce((acc, sender) => {
       acc[sender.clerkId] = sender;
       return acc;
-    }, {} as any);
+    }, {} as SenderMap);
 
     const messagesWithSenders = messages.map(message => ({
       ...message,
       sender: senderMap[message.senderId],
-      isRead: message.readBy?.some(read => read.userId === userId),
+      isRead: message.readBy?.some((read: { userId: string; readAt: Date }) => read.userId === userId),
       readCount: message.readBy?.length || 0
     }));
 
@@ -268,7 +301,7 @@ export const getChatMessages = async (chatId: string, page: number = 1, limit: n
   }
 };
 
-// Mark messages as read with enhanced Pusher integration
+  // Mark messages as read with enhanced Pusher integration
 export const markMessagesAsRead = async (chatId: string) => {
   try {
     const { userId } = await auth();
@@ -276,12 +309,18 @@ export const markMessagesAsRead = async (chatId: string) => {
 
     await connectToDB();
 
+    // Define type for the lean message document
+    interface LeanMessage {
+      _id: string;
+      senderId: string;
+    }
+
     // Get unread messages in the chat by current user
     const unreadMessages = await Message.find({
       chatId,
       senderId: { $ne: userId }, // Not sent by current user
       'readBy.userId': { $ne: userId } // Not read by current user
-    }).select('_id senderId').lean();
+    }).select('_id senderId').lean<LeanMessage[]>();
 
     if (unreadMessages.length === 0) {
       return { success: true, markedCount: 0 };
@@ -341,7 +380,8 @@ export const getAvailableUsers = async (searchTerm?: string) => {
 
     await connectToDB();
 
-    const query: any = {
+    // Use properly typed query object
+    const query: UserSearchQuery = {
       clerkId: { $ne: userId } // Exclude current user
     };
 
@@ -356,7 +396,7 @@ export const getAvailableUsers = async (searchTerm?: string) => {
     const users = await User.find(query)
       .select('clerkId first_name last_name image email lastSeen')
       .limit(20)
-      .lean();
+      .lean<LeanUser[]>();
 
     // Add online status
     const usersWithStatus = users.map(user => {

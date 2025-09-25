@@ -27,6 +27,12 @@ interface ChatSidebarProps {
   loading?: boolean;
 }
 
+// Define type for Pusher channel
+interface PusherChannel {
+  name: string;
+  bind: (event: string, callback: (data: TypingUser) => void) => void;
+}
+
 const ChatSidebar = memo(({
   chats,
   selectedChat,
@@ -51,10 +57,10 @@ const ChatSidebar = memo(({
   useEffect(() => {
     if (!uniqueChats.length) return;
 
-    const subscriptions: any[] = [];
+    const subscriptions: PusherChannel[] = [];
 
     uniqueChats.forEach(chat => {
-      const channel = pusherClient.subscribe(PUSHER_CHANNELS.TYPING(chat._id));
+      const channel = pusherClient.subscribe(PUSHER_CHANNELS.TYPING(chat._id)) as PusherChannel;
       
       const handleUserTyping = (data: TypingUser) => {
         // Only show typing if it's not the current user
@@ -83,10 +89,9 @@ const ChatSidebar = memo(({
     return () => {
       subscriptions.forEach(channel => {
         try {
-          // channel.name should exist on the channel instance
           pusherClient.unsubscribe(channel.name);
-        } catch (err) {
-          // In case channel object shape differs, attempt safe unsubscribe by chat id fallback
+        } catch {
+          // Silently handle any unsubscribe errors
         }
       });
       setTypingUsers([]); // Clear typing indicators when component unmounts
